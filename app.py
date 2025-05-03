@@ -15,7 +15,11 @@ from main import (all_other, education_master, finale, last_score,
                   main_score, master_score, resume_parsing_2, to_check_exp)
 
 # Initialize Flask app
+from flask_cors import CORS
+
 app = Flask(__name__)
+
+CORS(app)
 logging.basicConfig(level=logging.INFO)
 
 # Constants
@@ -104,20 +108,25 @@ from flask import Flask, jsonify, request
 
 @app.route('/calculate_score', methods=['POST'])
 def calculate_score():
-    # Retrieve the uploaded file
     pdf_file = request.files.get('pdf_file')
-    jd = request.form.get('jd')  # Use form-data for JD
-
+    jd = request.form.get('jd')  
     if not pdf_file or not jd:
         return jsonify({"error": "PDF file and Job Description are required"}), 400
 
-    # Process the file and JD
-    score = start(pdf_file, jd)
+    metadata=root(extract_text_from_pdf(pdf_file),jd)
+    if metadata== 'Invalid_JD':
+        return jsonify({"error": "Invalid JD"}), 400
 
-    # Return the result
-    return jsonify({"score": score})
+    if not metadata or not metadata.get('parsed_exp'):
+        return jsonify({"error": "Not a valid resume"}), 400    
+    score = start(pdf_file, jd, metadata['parsed_exp'])
+    if metadata:
+        output=jsonify({'score':score['ss'],'metadata':metadata,'resume_specific':score['li']})
+    else:
+        output=jsonify({'score':score['ss'],'resume_specific':score['li']})
+    return output
 
 
 if __name__ == '__main__':
-    
-    app.run(debug=True, threaded=False,use_reloader=False)
+    # Bind to 0.0.0.0 to allow external connections (necessary for Render)
+    app.run(debug=False, threaded=True, use_reloader=False)
