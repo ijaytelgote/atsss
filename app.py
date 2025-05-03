@@ -1,25 +1,31 @@
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disables GPU and uses only CPU
-os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-os.environ["FLASK_ENV"] = "production"
-
-
+import base64
 import logging
+import os
+import sys
 import threading
 
+import bcrypt
 import fitz  # PyMuPDF
-from flask import Flask, jsonify, request
+import gdown
+from main import list_down_reasons
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from analysed_resume.main import root
+from cover_letter import cv_gen
+from flask import Flask, jsonify, request, send_file
 from main import (all_other, education_master, finale, last_score,
                   logic_actionable_words, logic_similarity_matching2,
                   main_score, master_score, resume_parsing_2, to_check_exp)
 
-# Initialize Flask app
-app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
+UPLOAD_FOLDER = 'uploads'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Constants
 country = 'India'
+class User:
+    username=None
+from opt import *
 
 def ensure_all_scores(score_dict, required_keys):
     for key in required_keys:
@@ -29,6 +35,7 @@ def ensure_all_scores(score_dict, required_keys):
 def extract_text_from_pdf(pdf_file):
     try:
         pdf_content = pdf_file.read()
+        pdf_file.seek(0)
         pdf_text = ""
         with fitz.open(stream=pdf_content, filetype="pdf") as pdf:
             for page in pdf:
@@ -46,18 +53,32 @@ def run_thread(target, *args):
     except Exception as e:
         logging.error(f"Error in {target.__name__}: {e}")
 
-def convert_tuple_to_int(t):
-    return t[0] if isinstance(t, tuple) and len(t) == 1 else None
+def getter(pdf_path):
+    pdf_path.seek(0)
+    pdf_data = pdf_path.read()
+    pdf_path.seek(0)
+    return pdf_path.filename,  pdf_data
 
-def start(pdf_path, text_input):
+def getter2(pdf_path):
+    with open(pdf_path, 'rb') as file:
+        pdf_data=file.read()
+    return pdf_data
+def start(pdf_path, text_input,exp):
     resume = extract_text_from_pdf(pdf_path)
     jd = text_input
 
     if resume and jd:
+        data45=getter(pdf_path)
+        metadata = {
+            'username': User.username,
+            'pdf_name': str(data45[0]),
+            'pdfBase64': base64.b64encode(data45[1]).decode('utf-8'),
+            }
+        store_pdf(metadata)
         run_thread(education_master, resume, master_score, country)
         run_thread(finale, resume, master_score)
-        run_thread(resume_parsing_2, resume, master_score)
-        run_thread(to_check_exp, resume, jd, main_score)
+        run_thread(resume_parsing_2, resume, master_score,exp)
+        run_thread(to_check_exp, resume, jd, main_score,exp)
         run_thread(logic_actionable_words, resume, master_score)
         run_thread(logic_similarity_matching2, resume, jd, master_score)
         run_thread(all_other, master_score, pdf_path)
@@ -83,7 +104,6 @@ def start(pdf_path, text_input):
 
         work_exp_matches = main_score['exp_match']
         scoring = last_score(all_score, work_exp_matches)
-        print(">>>>>>>>>",if_resume)
         if if_resume == 1:
             logging.info("Resume parsed successfully")
             if isinstance(scoring, str):
@@ -91,33 +111,70 @@ def start(pdf_path, text_input):
             else:
                 current_value = float(scoring)
         else:
-            logging.info(f"Resume not parsed successfully: {if_resume}")
+            logging.info(f"Resume not parsed: {if_resume}")
             current_value = 0
+        master_score.update({'exp_match': main_score['exp_match']})
+        li={}
+        li['ss']=current_value
+        li['li']=list(set(list_down_reasons()))
 
-        return current_value
-
-import logging
-
-import fitz  # PyMuPDF
-from flask import Flask, jsonify, request
+        return li
 
 
-@app.route('/calculate_score', methods=['POST'])
-def calculate_score():
-    # Retrieve the uploaded file
+
+
+
+def parse(link):
+    codes=link.split('/')
+    for i in codes:
+        if len(i)==33:
+            return i
+    return None
+
+
+
+from flask_cors import CORS
+
+app = Flask(__name__)
+
+CORS(app)
+
+@app.route('/coverLetter', methods=['POST'])
+def coverLtter():
     pdf_file = request.files.get('pdf_file')
-    jd = request.form.get('jd')  # Use form-data for JD
-
+    jd = request.form.get('jd')  
     if not pdf_file or not jd:
         return jsonify({"error": "PDF file and Job Description are required"}), 400
 
-    # Process the file and JD
-    score = start(pdf_file, jd)
+    coverL=cv_gen(extract_text_from_pdf(pdf_file),jd)
+    if coverL:
+        output=jsonify({'cover_letter':coverL})
+        return output
+    
+    
+@app.route('/calculate_score', methods=['POST'])
+def calculate_score():
+    pdf_file = request.files.get('pdf_file')
+    jd = request.form.get('jd')  
+    if not pdf_file or not jd:
+        return jsonify({"error": "PDF file and Job Description are required"}), 400
 
-    # Return the result
-    return jsonify({"score": score})
+    metadata=root(extract_text_from_pdf(pdf_file),jd)
+    if metadata== 'Invalid_JD':
+        return jsonify({"error": "Invalid JD"}), 400
+
+    if not metadata or not metadata.get('parsed_exp'):
+        return jsonify({"error": "Not a valid resume"}), 400    
+    score = start(pdf_file, jd, metadata['parsed_exp'])
+    if metadata:
+        output=jsonify({'score':score['ss'],'metadata':metadata,'resume_specific':score['li']})
+    else:
+        output=jsonify({'score':score['ss'],'resume_specific':score['li']})
+    return output
 
 
 if __name__ == '__main__':
-    
-    app.run(debug=True, threaded=False,use_reloader=False)
+    # Bind to 0.0.0.0 to allow external connections (necessary for Render)
+    app.run(debug=False, threaded=True, use_reloader=False)
+
+# #waitress-serve --listen=0.0.0.0:5000 flask_app:app
