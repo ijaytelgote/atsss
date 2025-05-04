@@ -3,29 +3,110 @@ import logging
 import os
 import sys
 import threading
-
 import bcrypt
 import fitz  # PyMuPDF
 import gdown
 from main import list_down_reasons
-
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 from analysed_resume.main import root
 from cover_letter import cv_gen
 from flask import Flask, jsonify, request, send_file
 from main import (all_other, education_master, finale, last_score,
                   logic_actionable_words, logic_similarity_matching2,
                   main_score, master_score, resume_parsing_2, to_check_exp)
+import firebase_admin
+from firebase_admin import credentials, db
+
+
 
 logging.basicConfig(level=logging.INFO)
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 country = 'India'
+
+
+
+creadd={
+'type' : os.getenv(type)
+'project_id' : os.getenv(project_id)
+'private_key_id' : os.getenv(private_key_id)
+'private_key' : os.getenv(private_key)
+'client_email' : os.getenv(client_email)
+'client_id' : os.getenv(client_id)
+'auth_uri' : os.getenv(auth_uri)
+'token_uri' : os.getenv(token_uri)
+'auth_provider_x509_cert_url' : os.getenv(auth_provider_x509_cert_url)
+'client_x509_cert_url' : os.getenv(client_x509_cert_url)
+'universe_domain' : os.getenv(universe_domain)
+}
+
+
+if not firebase_admin._apps:
+    cred = credentials.Certificate(creadd)
+    firebase_admin.initialize_app(cred, {'databaseURL': 'https://atscore-f8c1a-default-rtdb.firebaseio.com/'})
+ref = db.reference('AUTH')
+ref2 = db.reference('HISTORY')
+ref3 = db.reference('REPORT')
+ref4 = db.reference('SCAM_UPDATES')
+
+
+
 class User:
     username=None
 from opt import *
+
+
+def hashed(username,password):
+    mashed=str(username)+str(password)
+    bytes = mashed.encode('utf-8')   
+    salt = bcrypt.gensalt() 
+    hash = bcrypt.hashpw(bytes, salt) 
+    return hash.decode('utf-8')
+
+def check_hashed(hash,new_password):
+    decoded_hash=hash.encode('utf-8')
+    return bcrypt.checkpw(new_password, decoded_hash)
+
+
+
+
+
+
+def signup_(metadata):
+    item_ref = ref.child(metadata.get('username'))  # Use the custom key
+    item_data = item_ref.get()  # Get current data for the item
+
+    if item_data:
+        return "User already exists"
+    new_item_data = {
+        "nick_id": metadata['nick'],
+        'username':metadata['username'],
+        'email':metadata.get('email')
+    }
+    item_ref.set(new_item_data)
+
+def get_email():
+    username=User.username
+    item_ref = ref.child(username)  
+    item_data = item_ref.get()  
+    print(item_data)
+    if item_data:
+        email=item_data.get('email')
+        if email:
+            return email
+        return None
+    return 'Please login does not exists'
+
+
+    
+def signin_(metadata):
+    User.username=str(metadata.get('username'))
+    item_ref = ref.child(metadata.get('username'))  
+    item_data = item_ref.get()  
+    if item_data:
+        if check_hashed(item_data['nick_id'],metadata.get('nick')) :
+            return True
+        return None
+    return 'User does not exists'
 
 def ensure_all_scores(score_dict, required_keys):
     for key in required_keys:
@@ -74,6 +155,7 @@ def start(pdf_path, text_input,exp):
             'pdf_name': str(data45[0]),
             'pdfBase64': base64.b64encode(data45[1]).decode('utf-8'),
             }
+        store_pdf(metadata)
         run_thread(education_master, resume, master_score, country)
         run_thread(finale, resume, master_score)
         run_thread(resume_parsing_2, resume, master_score,exp)
@@ -121,6 +203,27 @@ def start(pdf_path, text_input,exp):
 
 
 
+def store_pdf(metadata):
+    data = ref2.child(metadata.get('username'))
+    item = data.get()
+    item ={"pdf_name":metadata.get('pdf_name'),"pdfBase64":metadata.get('pdfBase64')}
+    data.set(item)
+    logging.info("PDF has been saved")
+    pass
+
+def get_stored_pdf(metadata):
+    data = ref2.child(metadata.get('username'))
+    item = data.get()
+    return item
+
+
+
+def get_saved_pdf():
+    metadata = {'username': User.username}  #Adjust metadata as needed
+    output = get_stored_pdf(metadata)
+    pdfbase64=output.get('pdfBase64')
+    file_name=output.get('pdf_name')
+    return pdfbase64,file_name
 
 
 def parse(link):
@@ -131,12 +234,144 @@ def parse(link):
     return None
 
 
+def report_area(metadata):
+    data = ref3.child(metadata.get('username'))
+    item = data.get()
+    if item:
+        item.append(metadata.get('problem'))
+        data.set(item)
+        logging.info("new report has been saved")
+    else:
+        item =metadata.get('problem')
+        data.set([item])
+        logging.info("report has been saved")
+
+    
+def scam_area(metadata):
+    data = ref4.child(metadata.get('username'))
+    item = data.get()
+    if item:
+        item.append(metadata.get('scam'))
+        data.set(item)
+        logging.info("new scam has been saved")
+    else:
+        item =metadata.get('scam')
+        data.set([item])
+        logging.info("scam has been saved")
 
 from flask_cors import CORS
 
 app = Flask(__name__)
 
 CORS(app)
+@app.route("/report",methods=["POST"])
+def sub_report():
+    data=request.get_json()
+    problem=data.get('problem')
+    send_feedback_mail(receiver_email=get_email())  
+
+
+    if not problem:
+        return jsonify({"error": "Problem description is required."}), 400
+    report_area({"username":User.username,"problem":problem})
+    return jsonify({"message":"report has been saved"}), 200
+
+@app.route("/submit_feedback",methods=["POST"])
+def sub_scam():
+    data=request.get_json()
+    scam=data.get('feedback')
+    if not scam:
+        return jsonify({"status": "error", "message": "Feedback cannot be empty"})
+    scam_area({"username":User.username,"scam":scam})
+    return jsonify({"status": "success"})
+
+
+@app.route('/gdrive_store', methods=['GET', 'POST'])
+def gdrive_store():
+    if request.method == 'POST':
+        link = request.form.get('file_id')
+        if not link:
+            return jsonify({"error": "Error: link is required!"}), 400
+        try:
+            file_id = parse(link)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        
+        download_url = f"https://drive.google.com/uc?id={file_id}"
+        output_file = os.path.join(UPLOAD_FOLDER, f'resume.pdf')   # Unique file name
+        try:
+            gdown.download(download_url, output_file, quiet=False)
+            outer = getter2(output_file)
+            metadata = {
+                'username': User.username,
+                'pdf_name': 'Resume.pdf',
+                'pdfBase64': base64.b64encode(outer).decode('utf-8'),
+            }
+            store_pdf(metadata)
+            ioss = get_saved_pdf()
+            
+            return jsonify({
+                "pdfBase64": ioss[0],
+                "file_name": ioss[1]
+            }), 200
+        except Exception as e:
+            app.logger.error(f"Error processing file: {e}")
+            return jsonify({"error": f"Failed to download file: {str(e)}"}), 500
+
+
+@app.route('/saved_pdf', methods=['GET'])
+def saved_pdf():
+    try:
+        ioss=get_saved_pdf()
+        return jsonify({"pdfBase64":ioss[0],"file_name":ioss[1]}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    
+    
+@app.route('/signup', methods=['POST'])
+def signup():
+    try:
+        data = request.json
+        username = data.get("username")
+        password = data.get("password")
+        email=data.get('email')
+        ids_=hashed(username,password)
+        metadata={
+            'username':username,
+            'email':email,
+            'password':password,
+            'nick':ids_,
+            'intent':'sign_up'
+            }
+        o=signup_(metadata)
+        if o=='User already exists':
+            return jsonify({"message": "User already exists, please login"}), 200
+        return jsonify({"message": "User created successfully", "uid": metadata['nick']}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@app.route('/signin', methods=['POST'])
+def signin():
+    try:
+        data = request.json
+        username = data.get("username")
+        password = data.get("password")
+        ids_=(str(username)+str(password)).encode('utf-8')  
+        metadata={
+        'username':username,
+        'password':password, 
+        'nick':ids_,
+        'intent':'sign_in'}
+        o=signin_(metadata)
+        if o:
+            if o=='User does not exists':
+                return jsonify({"message": "User does not exists, please signup"}), 200
+            else:
+                return jsonify({"message": "Signed in Successfully","token":str(ids_)}), 200
+        else:
+            return jsonify({"message": "Signed in Unsuccessfully"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 @app.route('/coverLetter', methods=['POST'])
 def coverLtter():
@@ -170,7 +405,6 @@ def calculate_score():
     else:
         output=jsonify({'score':score['ss'],'resume_specific':score['li']})
     return output
-
 
 if __name__ == '__main__':
     # Bind to 0.0.0.0 to allow external connections (necessary for Render)
