@@ -389,7 +389,22 @@ def coverLtter():
         output=jsonify({'cover_letter':coverL})
         return output
     
-    
+@app.route('/parse_resume', methods=['POST'])
+def _resume_parser():
+    pdf_file = request.files.get('pdf_file')
+    if not pdf_file:
+        return jsonify({"error": "PDF file is required"}), 400
+    resume = extract_text_from_pdf(pdf_file)
+    if resume:
+        parsed = parse_whole_resume(resume)
+        if parsed:
+            output = jsonify({'parsed_resume': parsed})
+        else:
+            output = jsonify({'error': 'Resume parsing failed'})
+        return output
+
+
+
 @app.route('/calculate_score', methods=['POST'])
 def calculate_score():
     pdf_file = request.files.get('pdf_file')
