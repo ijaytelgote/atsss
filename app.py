@@ -155,7 +155,11 @@ def start(pdf_path, text_input,exp):
             'pdf_name': str(data45[0]),
             'pdfBase64': base64.b64encode(data45[1]).decode('utf-8'),
             }
-        store_pdf(metadata)
+        try:
+          store_pdf(metadata)
+        except:
+          print('skipping pdf')  
+          
         run_thread(education_master, resume, master_score, country)
         run_thread(finale, resume, master_score)
         run_thread(resume_parsing_2, resume, master_score,exp)
