@@ -50,7 +50,7 @@ llm = ChatGroq(
     model_name='Gemma2-9b-It'
 )
 word2vec_model=joblib.load(r'word2vec_res_model.pkl')
-model=joblib.load(r'word_matrix_ml_model.pkl')
+model22=joblib.load(r'word_matrix_ml_model.pkl')
 
 list_down=[]
 load_dotenv()
@@ -652,7 +652,7 @@ def get_average_word2vec(words, word2vec_model):
 def another_word2vec(texts):
   X_new = np.array([get_average_word2vec(texts, word2vec_model)])
 
-  new_predictions = model.predict(X_new)
+  new_predictions = model22.predict(X_new)
   return  new_predictions
 
 def semi_final(texts):
