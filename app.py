@@ -8,6 +8,8 @@ import fitz  # PyMuPDF
 import gdown
 from main import list_down_reasons
 from analysed_resume.main import root
+from analysed_resume.parser import parse_whole_resume
+
 from cover_letter import cv_gen
 from flask import Flask, jsonify, request, send_file
 from main import (all_other, education_master, finale, last_score,
